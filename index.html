@@ -427,10 +427,22 @@ async function loadFromGAS(){
       if(d.users && d.users.length) DB.users = d.users;
       if(d.rawMaterials && d.rawMaterials.length) DB.rawMaterials = d.rawMaterials;
       if(d.inventory && d.inventory.length) DB.inventory = d.inventory;
-      if(d.formulations) DB.formulations = d.formulations;
+      if(d.formulations) DB.formulations = d.formulations.map(f=>({
+        ...f,
+        productName: f.productName||'Unnamed',
+        productCode: f.productCode||'',
+        batchNo: f.batchNo||'',
+        mfgDate: f.mfgDate||'',
+        byName: f.byName||f.by||'',
+        remarks: f.remarks||'',
+        lots: Number(f.lots)||1,
+        inventoryDebited: f.inventoryDebited===false||f.inventoryDebited==='false'?false:true,
+        items: Array.isArray(f.items)?f.items.map(i=>({rmId:Number(i.rmId),qty:Number(i.qty)||0})).filter(i=>i.rmId&&i.qty>0):[],
+      }));
       if(d.stockTransactions) DB.stockTransactions = d.stockTransactions;
       if(d.auditLog) DB.auditLog = d.auditLog;
-      if(d.packagingCost) DB.packagingCost = Number(d.packagingCost);
+      if(d.packagingCost!==undefined) DB.packagingCost = Number(d.packagingCost)||26;
+      if(d.settings) DB.settings = Object.assign({debitInventoryOnSave:true}, d.settings);
       if(d.nextId) DB.nextId = d.nextId;
       toast('Data loaded from Google Sheets ✓','success');
     } else {
@@ -616,10 +628,10 @@ function getStockStatus(rm){
 }
 function calcBatchCost(f){
   let rmCost=0;
-  f.items.forEach(item=>{const rm=getRMById(item.rmId);if(rm)rmCost+=item.qty*rm.rate;});
-  return{rmCost,packaging:DB.packagingCost,total:rmCost+DB.packagingCost};
+  (f.items||[]).forEach(item=>{const rm=getRMById(item.rmId);if(rm)rmCost+=item.qty*(rm.rate||0);});
+  return{rmCost,packaging:DB.packagingCost||0,total:rmCost+(DB.packagingCost||0)};
 }
-function calcTotalQty(f){return f.items.reduce((s,i)=>s+i.qty,0);}
+function calcTotalQty(f){return (f.items||[]).reduce((s,i)=>s+(i.qty||0),0);}
 
 function nowDateTime(){
   const now=new Date();
@@ -751,7 +763,7 @@ function renderDashboard(){
           ${can('viewCost')?`<div class="cost-tag" style="font-size:15px;font-weight:700;">${fmtCurrency(cost.total)}</div>`:''}
         </div>
         <div class="batch-card-meta">
-          <span>📅 ${f.mfgDate}</span><span>👤 ${f.byName}</span><span>⚗ ${f.items.length} materials</span>
+          <span>📅 ${f.mfgDate||''}</span><span>👤 ${f.byName||f.by||''}</span><span>⚗ ${f.items.length} materials</span>
         </div>
       </div>`;
     });
@@ -830,6 +842,9 @@ function renderFormulations(){
   if(myForms.length===0){html+=`<div class="alert alert-info">No formulations found. Create your first batch!</div>`;}
 
   myForms.slice().reverse().forEach(f=>{
+    try{
+    if(!f||!f.productName)return;
+    f.items=f.items||[];
     const cost=calcBatchCost(f);
     const totalQty=calcTotalQty(f);
     html+=`<div class="batch-card" data-id="${f.id}" data-name="${f.productName.toLowerCase()}" data-code="${f.productCode.toLowerCase()}" data-batch="${f.batchNo.toLowerCase()}" data-date="${f.mfgDate}">
@@ -855,12 +870,13 @@ function renderFormulations(){
         </div>
       </div>
       <div class="batch-card-meta" style="margin-top:10px;">
-        <span>📅 ${f.mfgDate}</span><span>👤 ${f.byName}</span><span>⚗ ${f.items.length} materials · ${totalQty.toFixed(2)} kg total</span>${f.remarks?`<span>💬 ${f.remarks}</span>`:''}<span style="background:${f.inventoryDebited===false?'var(--accent-light)':'var(--green-light)'};color:${f.inventoryDebited===false?'var(--accent2)':'var(--green)'};padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;">${f.inventoryDebited===false?'🔒 No Debit':'📦 Debited'}</span>
+        <span>📅 ${f.mfgDate}</span><span>👤 ${f.byName}</span><span>⚗ ${(f.items||[]).length} materials · ${totalQty.toFixed(2)} kg total</span>${f.remarks?`<span>💬 ${f.remarks}</span>`:''}<span style="background:${(f.inventoryDebited===false||f.inventoryDebited==="false")?'var(--accent-light)':'var(--green-light)'};color:${(f.inventoryDebited===false||f.inventoryDebited==="false")?'var(--accent2)':'var(--green)'};padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;">${(f.inventoryDebited===false||f.inventoryDebited==="false")?'🔒 No Debit':'📦 Debited'}</span>
       </div>
       <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
-        ${f.items.map(item=>{const rm=getRMById(item.rmId);return rm?`<span style="background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:500;color:var(--text2)">${rm.name} (${item.qty} ${rm.unit})</span>`:''}).join('')}
+        ${(f.items||[]).map(item=>{const rm=getRMById(item.rmId);return rm?`<span style="background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:500;color:var(--text2)">${rm.name} (${item.qty} ${rm.unit})</span>`:''}).join('')}
       </div>
     </div>`;
+    }catch(e){console.warn("Skipped formulation render:",f?.id,e);}
   });
   html+=`</div>`;
   return html;
@@ -1061,7 +1077,7 @@ function saveFormulation(){
 
   const f={id:DB.nextId.formulation++,productName:pname,productCode:pcode,batchNo:batch,mfgDate:mfgDateTime,remarks,by:currentUser.username,byName:currentUser.name,createdAt:mfgDateTime,lots,inventoryDebited:debit,items};
   DB.formulations.push(f);
-  const debitNote=debit?''>' — inventory debited':' — inventory NOT debited (Debit Off)';
+  const debitNote=debit?' — inventory debited':' — inventory NOT debited (Debit Off)';
   const auditEntry={time:mfgDateTime,user:currentUser.name,action:'Created formulation',detail:`${pcode} — Batch ${batch}${lots>1?' ('+lots+' lots)':''}${debitNote}`};
   DB.auditLog.unshift(auditEntry);
 
@@ -1262,65 +1278,7 @@ function filterCAFml(){
   });
 }
 
-function openNewCostAnalysis(rerunId=null){
-  const src = rerunId ? DB.costAnalysisRecords.find(r=>r.id===rerunId) : null;
-  let caItemCount=0;
 
-  const buildItemRow=(rmId=null,qty=null)=>{
-    caItemCount++;
-    const id='caitem-'+caItemCount;
-    const rmOpts=DB.rawMaterials.map(r=>`<option value="${r.id}" ${rmId&&r.id===rmId?'selected':''}>${r.name} (${r.code})</option>`).join('');
-    return `<div class="fi-row" id="${id}">
-      <select class="form-control" id="casel-${id}">${rmOpts}</select>
-      <input class="form-control" id="caqty-${id}" type="number" step="0.01" min="0" value="${qty||''}" placeholder="Qty">
-      <button class="remove-btn" onclick="document.getElementById('${id}').remove()">−</button>
-    </div>`;
-  };
-
-  let itemsHTML = '';
-  if(src && src.items){
-    src.items.forEach(i=>{ itemsHTML+=buildItemRow(i.rmId,i.qty); });
-  } else {
-    itemsHTML=buildItemRow();
-  }
-
-  const modal=`<div class="modal-overlay" id="ca-modal" onclick="if(event.target.id==='ca-modal')closeModal('ca-modal')">
-  <div class="modal modal-lg">
-    <div class="modal-header">
-      <div>
-        <div class="modal-title">${src?'Re-run Analysis: '+src.name:'New Cost Analysis'}</div>
-        <div style="font-size:12px;color:var(--text3);margin-top:2px;">No inventory will be deducted</div>
-      </div>
-      <button class="close-btn" onclick="closeModal('ca-modal')">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="form-row">
-        <div class="form-group"><label>Analysis Name ✱</label><input class="form-control" id="ca-name" value="${src?src.name+' (copy)':''}" placeholder="e.g. LDPE Pipe — Q2 2025"></div>
-        <div class="form-group"><label>Product Reference</label><input class="form-control" id="ca-pref" value="${src?src.productRef||'':''}" placeholder="e.g. FG003"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Batch Size (KG) ✱</label><input class="form-control" id="ca-bsize" type="number" step="0.01" value="${src?src.batchSize:''}" placeholder="e.g. 160"></div>
-        <div class="form-group"><label>Number of Lots</label><input class="form-control" id="ca-lots" type="number" min="1" value="${src?src.lots||1:1}" placeholder="1"></div>
-      </div>
-      <div class="form-group"><label>Notes / Remarks</label><textarea class="form-control" id="ca-notes" placeholder="Optional notes...">${src?src.notes||'':''}</textarea></div>
-      <hr style="border-color:var(--border);margin:14px 0;">
-      <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:10px;">Raw Material Items</div>
-      <div id="ca-items-wrap">${itemsHTML}</div>
-      <button class="add-item-btn" onclick="addCAItem()">＋ Add Material</button>
-      <div id="ca-live-result" style="margin-top:16px;"></div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="closeModal('ca-modal')">Cancel</button>
-      <button class="btn btn-secondary" onclick="previewCostAnalysis()">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> Preview
-      </button>
-      <button class="btn btn-primary" onclick="saveCostAnalysis()">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Save Analysis
-      </button>
-    </div>
-  </div></div>`;
-  document.body.insertAdjacentHTML('beforeend',modal);
-}
 
 let _caItemCount=0;
 function addCAItem(){
@@ -1456,8 +1414,6 @@ function openNewCostAnalysisFromFormulation(fId){
   window._caFromFormSrc=src;
   openNewCostAnalysis('_fromForm');
 }
-// Override openNewCostAnalysis to handle _fromForm
-const _origOpenCA=openNewCostAnalysis;
 function openNewCostAnalysis(rerunId=null){
   let src=null;
   if(rerunId==='_fromForm'){src=window._caFromFormSrc;window._caFromFormSrc=null;}
@@ -1662,13 +1618,14 @@ function previewBulkImport(event){
       const name=String(row[nameIdx]||'').trim();
       const code=String(row[codeIdx]||'').trim();
       const unit=String(row[unitIdx]||'KG').trim();
-      const rate=parseFloat(row[rateIdx])||0;
+      const rate=parseFloat(row[rateIdx]);
+    const rateFinal=isNaN(rate)?0:rate;
       const supplier=String(row[supplierIdx]||'').trim();
       if(!name||!code){previewHTML+=`<tr><td colspan="6" style="color:var(--red);">Skipping invalid row</td></tr>`;return;}
       const exists=DB.rawMaterials.find(r=>r.code===code);
       const status=exists?'<span class="status-pill status-low">UPDATE</span>':'<span class="status-pill status-ok">NEW</span>';
-      window._bulkImportData.push({name,code,unit,rate,supplier});
-      previewHTML+=`<tr><td class="td-primary">${name}</td><td class="mono" style="font-size:11px;">${code}</td><td>${unit}</td><td class="cost-tag">${fmtCurrency(rate)}</td><td>${supplier}</td><td>${status}</td></tr>`;
+      window._bulkImportData.push({name,code,unit,rate:rateFinal,supplier});
+      previewHTML+=`<tr><td class="td-primary">${name}</td><td class="mono" style="font-size:11px;">${code}</td><td>${unit}</td><td class="cost-tag">${fmtCurrency(rateFinal)}</td><td>${supplier}</td><td>${status}</td></tr>`;
     });
     previewHTML+=`</tbody></table></div>`;
     document.getElementById('bulk-preview').innerHTML=previewHTML;
@@ -1764,7 +1721,7 @@ function openRMModal(id){
             <option ${rm.unit==='PKT'?'selected':''}>PKT</option>
           </select>
         </div>
-        ${!isInventoryUser?`<div class="form-group"><label>Rate per Unit (₹) ✱</label><input class="form-control" id="rm-rate" type="number" step="0.01" value="${rm.rate||''}" placeholder="0.00"></div>`
+        ${!isInventoryUser?`<div class="form-group"><label>Rate per Unit (₹) ✱</label><input class="form-control" id="rm-rate" type="number" step="0.01" value="${rm.rate!==undefined&&rm.rate!==''?rm.rate:''}" placeholder="0.00"></div>`
         :`<div class="form-group"><label>Rate per Unit (₹)</label><input class="form-control" id="rm-rate" type="text" value="—" readonly style="background:var(--bg3);color:var(--text3);" title="Only admin can set pricing"><div class="form-hint">Only Admin can set pricing</div></div>`}
       </div>
       ${!isInventoryUser?`<div class="form-group"><label>Supplier</label><input class="form-control" id="rm-supplier" value="${rm.supplier||''}" placeholder="Supplier name"></div>`:''}
@@ -1786,26 +1743,31 @@ function saveRM(id){
   const code=document.getElementById('rm-code').value.trim();
   const unit=document.getElementById('rm-unit').value;
   const rateEl=document.getElementById('rm-rate');
-  const rate=currentUser.role==='inventory'?(getRMById(id)?.rate||0):parseFloat(rateEl.value);
+  const rate=currentUser.role==='inventory'?(getRMById(id)?.rate||0):(parseFloat(rateEl.value)||0);
   const supplierEl=document.getElementById('rm-supplier');
   const supplier=supplierEl?supplierEl.value.trim():(getRMById(id)?.supplier||'');
   const updatedDate=document.getElementById('rm-updated').value;
   const minStockEl=document.getElementById('rm-minstock');
-  const minStock=minStockEl?parseInt(minStockEl.value)||0:(getRMById(id)?.minStock||0);
+  const minStock=minStockEl?(isNaN(parseInt(minStockEl.value,10))?0:parseInt(minStockEl.value,10)):(getRMById(id)?.minStock||0);
   if(!name||!code){toast('Name and Code are required','error');return;}
-  if(currentUser.role!=='inventory'&&!rate){toast('Rate is required','error');return;}
+  // rate can be 0 (allowed) — only block if field is completely empty/NaN
+  if(currentUser.role!=='inventory'&&isNaN(parseFloat(rateEl?.value))){toast('Rate is required — enter 0 if free','error');return;}
   if(id){
     const rm=DB.rawMaterials.find(r=>r.id===id);
     const oldName=rm.name;
-    Object.assign(rm,{name,code,unit,rate,supplier,updatedDate,minStock});
+    // Update DB in memory
+    rm.name=name; rm.code=code; rm.unit=unit; rm.rate=rate;
+    rm.supplier=supplier; rm.updatedDate=updatedDate; rm.minStock=minStock;
+    // Build a clean explicit object for GAS — no extra props, exact field order
+    const rmForGAS={id:rm.id,name:name,code:code,unit:unit,rate:rate,supplier:supplier,updatedDate:updatedDate,minStock:minStock};
     const detail=`${code} — ${name}${oldName!==name?' (renamed from '+oldName+')':''}`;
     addAudit('Updated raw material',detail);
     toast('Saving...','info');
-    gasCall('saveRawMaterial',{rm,isNew:false})
+    gasCall('saveRawMaterial',{rm:rmForGAS,isNew:false})
       .then(()=>gasCall('addAudit',{entry:DB.auditLog[0]}))
       .then(()=>toast('Material updated ✓','success'));
   } else {
-    const newRM={id:DB.nextId.rm++,name,code,unit,rate,supplier,updatedDate,minStock};
+    const newRM={id:DB.nextId.rm++,name:name,code:code,unit:unit,rate:rate,supplier:supplier,updatedDate:updatedDate,minStock:minStock};
     DB.rawMaterials.push(newRM);
     DB.inventory.push({id:DB.nextId.rm,rmId:newRM.id,quantity:0});
     DB.nextId.rm++;
