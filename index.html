@@ -427,10 +427,22 @@ async function loadFromGAS(){
       if(d.users && d.users.length) DB.users = d.users;
       if(d.rawMaterials && d.rawMaterials.length) DB.rawMaterials = d.rawMaterials;
       if(d.inventory && d.inventory.length) DB.inventory = d.inventory;
-      if(d.formulations) DB.formulations = d.formulations;
+      if(d.formulations) DB.formulations = d.formulations.map(f=>({
+        ...f,
+        productName: f.productName||'Unnamed',
+        productCode: f.productCode||'',
+        batchNo: f.batchNo||'',
+        mfgDate: f.mfgDate||'',
+        byName: f.byName||f.by||'',
+        remarks: f.remarks||'',
+        lots: Number(f.lots)||1,
+        inventoryDebited: f.inventoryDebited===false||f.inventoryDebited==='false'?false:true,
+        items: Array.isArray(f.items)?f.items.map(i=>({rmId:Number(i.rmId),qty:Number(i.qty)||0})).filter(i=>i.rmId&&i.qty>0):[],
+      }));
       if(d.stockTransactions) DB.stockTransactions = d.stockTransactions;
       if(d.auditLog) DB.auditLog = d.auditLog;
-      if(d.packagingCost) DB.packagingCost = Number(d.packagingCost);
+      if(d.packagingCost!==undefined) DB.packagingCost = Number(d.packagingCost)||26;
+      if(d.settings) DB.settings = Object.assign({debitInventoryOnSave:true}, d.settings);
       if(d.nextId) DB.nextId = d.nextId;
       toast('Data loaded from Google Sheets ✓','success');
     } else {
@@ -616,10 +628,10 @@ function getStockStatus(rm){
 }
 function calcBatchCost(f){
   let rmCost=0;
-  f.items.forEach(item=>{const rm=getRMById(item.rmId);if(rm)rmCost+=item.qty*rm.rate;});
-  return{rmCost,packaging:DB.packagingCost,total:rmCost+DB.packagingCost};
+  (f.items||[]).forEach(item=>{const rm=getRMById(item.rmId);if(rm)rmCost+=item.qty*(rm.rate||0);});
+  return{rmCost,packaging:DB.packagingCost||0,total:rmCost+(DB.packagingCost||0)};
 }
-function calcTotalQty(f){return f.items.reduce((s,i)=>s+i.qty,0);}
+function calcTotalQty(f){return (f.items||[]).reduce((s,i)=>s+(i.qty||0),0);}
 
 function nowDateTime(){
   const now=new Date();
@@ -751,7 +763,7 @@ function renderDashboard(){
           ${can('viewCost')?`<div class="cost-tag" style="font-size:15px;font-weight:700;">${fmtCurrency(cost.total)}</div>`:''}
         </div>
         <div class="batch-card-meta">
-          <span>📅 ${f.mfgDate}</span><span>👤 ${f.byName}</span><span>⚗ ${f.items.length} materials</span>
+          <span>📅 ${f.mfgDate||''}</span><span>👤 ${f.byName||f.by||''}</span><span>⚗ ${f.items.length} materials</span>
         </div>
       </div>`;
     });
@@ -830,6 +842,9 @@ function renderFormulations(){
   if(myForms.length===0){html+=`<div class="alert alert-info">No formulations found. Create your first batch!</div>`;}
 
   myForms.slice().reverse().forEach(f=>{
+    try{
+    if(!f||!f.productName)return;
+    f.items=f.items||[];
     const cost=calcBatchCost(f);
     const totalQty=calcTotalQty(f);
     html+=`<div class="batch-card" data-id="${f.id}" data-name="${f.productName.toLowerCase()}" data-code="${f.productCode.toLowerCase()}" data-batch="${f.batchNo.toLowerCase()}" data-date="${f.mfgDate}">
@@ -855,12 +870,13 @@ function renderFormulations(){
         </div>
       </div>
       <div class="batch-card-meta" style="margin-top:10px;">
-        <span>📅 ${f.mfgDate}</span><span>👤 ${f.byName}</span><span>⚗ ${f.items.length} materials · ${totalQty.toFixed(2)} kg total</span>${f.remarks?`<span>💬 ${f.remarks}</span>`:''}<span style="background:${(f.inventoryDebited===false||f.inventoryDebited==="false")?'var(--accent-light)':'var(--green-light)'};color:${(f.inventoryDebited===false||f.inventoryDebited==="false")?'var(--accent2)':'var(--green)'};padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;">${(f.inventoryDebited===false||f.inventoryDebited==="false")?'🔒 No Debit':'📦 Debited'}</span>
+        <span>📅 ${f.mfgDate}</span><span>👤 ${f.byName}</span><span>⚗ ${(f.items||[]).length} materials · ${totalQty.toFixed(2)} kg total</span>${f.remarks?`<span>💬 ${f.remarks}</span>`:''}<span style="background:${(f.inventoryDebited===false||f.inventoryDebited==="false")?'var(--accent-light)':'var(--green-light)'};color:${(f.inventoryDebited===false||f.inventoryDebited==="false")?'var(--accent2)':'var(--green)'};padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;">${(f.inventoryDebited===false||f.inventoryDebited==="false")?'🔒 No Debit':'📦 Debited'}</span>
       </div>
       <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
-        ${f.items.map(item=>{const rm=getRMById(item.rmId);return rm?`<span style="background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:500;color:var(--text2)">${rm.name} (${item.qty} ${rm.unit})</span>`:''}).join('')}
+        ${(f.items||[]).map(item=>{const rm=getRMById(item.rmId);return rm?`<span style="background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:500;color:var(--text2)">${rm.name} (${item.qty} ${rm.unit})</span>`:''}).join('')}
       </div>
     </div>`;
+    }catch(e){console.warn("Skipped formulation render:",f?.id,e);}
   });
   html+=`</div>`;
   return html;
