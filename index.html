@@ -397,7 +397,7 @@ const DB = {
   nextId:{rm:9,formulation:3,user:6,txn:4},
 };
 
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbweL7vquMZuNXrIeWuDWLESevd5Hyx2OzNTHHDD6xZ0U4f1F7H3ccAa1cGRtoLN7Ctc/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbxdwU-xW5N47gHwDoKcAH0DkIJIj1rVgso5eFcYDckwX7BZkmncOmGYUgOLnSQPdgrkDw/exec';
 
 let currentUser = null;
 let dashboardRefreshTimer = null;
@@ -842,41 +842,61 @@ function renderFormulations(){
   if(myForms.length===0){html+=`<div class="alert alert-info">No formulations found. Create your first batch!</div>`;}
 
   myForms.slice().reverse().forEach(f=>{
-    try{
-    if(!f||!f.productName)return;
-    f.items=f.items||[];
-    const cost=calcBatchCost(f);
-    const totalQty=calcTotalQty(f);
-    html+=`<div class="batch-card" data-id="${f.id}" data-name="${f.productName.toLowerCase()}" data-code="${f.productCode.toLowerCase()}" data-batch="${f.batchNo.toLowerCase()}" data-date="${f.mfgDate}">
-      <div class="batch-card-top">
-        <div>
-          <div class="batch-card-title">${f.productName}</div>
-          <div class="batch-card-code">${f.productCode} · Batch: ${f.batchNo}</div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          ${can('viewCost')?`<div class="cost-tag" style="font-size:15px;font-weight:700;">${fmtCurrency(cost.total)}</div>`:''}
-          <button class="btn btn-secondary btn-sm" onclick="viewFormulation(${f.id})">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> View
-          </button>
-          ${can('formulations')?`<button class="btn btn-teal btn-sm" onclick="copyFormulationAsNew(${f.id})">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Use as Template
-          </button>`:''}
-          <button class="btn btn-blue btn-sm" onclick="exportFormulationPDF(${f.id})">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> PDF
-          </button>
-          ${can('formulations')&&currentUser.role==='formulation'?`<button class="btn btn-secondary btn-sm" onclick="openEditBatchCodeModal(${f.id})">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit Codes
-          </button>`:''}
-        </div>
-      </div>
-      <div class="batch-card-meta" style="margin-top:10px;">
-        <span>📅 ${f.mfgDate}</span><span>👤 ${f.byName}</span><span>⚗ ${(f.items||[]).length} materials · ${totalQty.toFixed(2)} kg total</span>${f.remarks?`<span>💬 ${f.remarks}</span>`:''}<span style="background:${(f.inventoryDebited===false||f.inventoryDebited==="false")?'var(--accent-light)':'var(--green-light)'};color:${(f.inventoryDebited===false||f.inventoryDebited==="false")?'var(--accent2)':'var(--green)'};padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;">${(f.inventoryDebited===false||f.inventoryDebited==="false")?'🔒 No Debit':'📦 Debited'}</span>
-      </div>
-      <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
-        ${(f.items||[]).map(item=>{const rm=getRMById(item.rmId);return rm?`<span style="background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:500;color:var(--text2)">${rm.name} (${item.qty} ${rm.unit})</span>`:''}).join('')}
-      </div>
-    </div>`;
-    }catch(e){console.warn("Skipped formulation render:",f?.id,e);}
+    if(!f) return;
+    // Sanitize every field before rendering — GAS can return nulls, ISO dates, floats
+    const fId      = Number(f.id)||0;
+    const fName    = String(f.productName||'Unnamed');
+    const fCode    = String(f.productCode||'');
+    const fBatch   = String(f.batchNo||'');
+    // Clean ISO date to readable format
+    const rawDate  = String(f.mfgDate||'');
+    const fDate    = rawDate.replace('T',' ').replace(/\.\d{3}Z$/,'').slice(0,16);
+    const fDateKey = fDate.slice(0,10);
+    const fByName  = String(f.byName||f.by||'');
+    const fRemarks = String(f.remarks||'');
+    const fItems   = Array.isArray(f.items)?f.items:[];
+    const fDebited = f.inventoryDebited===false||f.inventoryDebited==='false'?false:true;
+    const cost     = calcBatchCost({items:fItems});
+    const totalQty = calcTotalQty({items:fItems});
+
+    html+='<div class="batch-card"'
+      +' data-id="'+fId+'"'
+      +' data-name="'+fName.toLowerCase().replace(/"/g,"")+'"'
+      +' data-code="'+fCode.toLowerCase().replace(/"/g,"")+'"'
+      +' data-batch="'+fBatch.toLowerCase().replace(/"/g,"")+'"'
+      +' data-date="'+fDateKey+'">';
+    html+='<div class="batch-card-top">';
+    html+='<div>';
+    html+='<div class="batch-card-title">'+fName+'</div>';
+    html+='<div class="batch-card-code">'+fCode+' &middot; Batch: '+fBatch+'</div>';
+    html+='</div>';
+    html+='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
+    if(can('viewCost')) html+='<div class="cost-tag" style="font-size:15px;font-weight:700;">'+fmtCurrency(cost.total)+'</div>';
+    html+='<button class="btn btn-secondary btn-sm" onclick="viewFormulation('+fId+')">'
+      +'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> View</button>';
+    if(can('formulations')) html+='<button class="btn btn-teal btn-sm" onclick="copyFormulationAsNew('+fId+')">'
+      +'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Use as Template</button>';
+    html+='<button class="btn btn-blue btn-sm" onclick="exportFormulationPDF('+fId+')">'
+      +'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> PDF</button>';
+    if(can('formulations')&&currentUser.role==='formulation') html+='<button class="btn btn-secondary btn-sm" onclick="openEditBatchCodeModal('+fId+')">'
+      +'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit Codes</button>';
+    html+='</div></div>';
+    html+='<div class="batch-card-meta" style="margin-top:10px;">';
+    html+='<span>📅 '+fDate+'</span>';
+    html+='<span>👤 '+fByName+'</span>';
+    html+='<span>⚗ '+fItems.length+' materials &middot; '+totalQty.toFixed(2)+' kg total</span>';
+    if(fRemarks) html+='<span>💬 '+fRemarks+'</span>';
+    html+='<span style="background:'+(fDebited?'var(--green-light)':'var(--accent-light)')
+      +';color:'+(fDebited?'var(--green)':'var(--accent2)')
+      +';padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;">'
+      +(fDebited?'📦 Debited':'🔒 No Debit')+'</span>';
+    html+='</div>';
+    html+='<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">';
+    fItems.forEach(function(item){
+      const rm=getRMById(item.rmId);
+      if(rm) html+='<span style="background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:500;color:var(--text2)">'+rm.name+' ('+item.qty+' '+rm.unit+')</span>';
+    });
+    html+='</div></div>';
   });
   html+=`</div>`;
   return html;
